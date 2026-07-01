@@ -1,0 +1,6 @@
+{
+  "Modality": "MR",
+  "MagneticFieldStrength": 3.0,
+  "Manufacturer": "Siemens",
+  "PulseSequenceType": "MPRAGE"
+}

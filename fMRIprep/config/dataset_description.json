@@ -1,0 +1,6 @@
+{
+  "Name": "ABIDE CMU Batch",
+  "BIDSVersion": "1.8.0",
+  "DatasetType": "raw",
+  "Authors": ["ABIDE Consortium"]
+}

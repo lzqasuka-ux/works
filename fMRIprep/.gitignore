@@ -1,0 +1,33 @@
+# Outputs (large files)
+output/
+*.nii.gz
+*.tsv
+*.csv
+*.png
+*.html
+*.zip
+*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# License (personal)
+license.txt
+
+# Docker
+*.tar
+Dockerfile
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
