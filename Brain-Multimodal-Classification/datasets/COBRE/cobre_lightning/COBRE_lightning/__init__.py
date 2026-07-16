@@ -1,0 +1,1 @@
+# COBRE lightweight CNN package
