@@ -1,12 +1,182 @@
 # 2026.8.7_MODEL_ver0.3
 
-**Multimodal Brain Disease Classification v0.3** — HC / Schizophrenia / ADHD 三分类模型，基于 sMRI + fMRI 多模态融合。
+**Multimodal Brain Disease Classification v0.3** — A model classifying **Healthy Control (HC)** / **Schizophrenia** / **ADHD** via sMRI + fMRI multimodal fusion.
+
+> This README covers **v0.2 → v0.3 changes only**. Architecture, modules, datasets and base usage identical to v0.2 are documented in [../2026.7.31_MODEL_ver0.2/README.md](../2026.7.31_MODEL_ver0.2/README.md).
+
+---
+
+## What's New in v0.3
+
+| Category | v0.2 | v0.3 |
+|----------|------|------|
+| **Functional Encoder** | Linear projection → GAT | **TemporalEncoder (1D CNN) → GAT**: temporal CNN learns per-ROI dynamics, then graph message passing |
+| **ROI Embedding** | Added after projection | **Added to raw input earlier** — breaks 246-node convergence sooner |
+| **Time Series Length** | Zero-padding to global max T | **Linear interpolation to fixed `--t_target 150`** |
+| **ROI Preprocessing** | per-ROI z-score inside trainer | **Moved into `collate_fn`** (z-score → interpolate in one place) |
+| **Calibration Metrics** | — | **NEW**: ECE, confidence metrics, confidence gap |
+| **Multimodal Validity Probe** | — | **NEW**: Logistic probes + fusion_gain |
+| **Latent Space Analysis** | Silhouette/DB printed only | **Structured metrics returned** + separation ratio (cosine metric) |
+| **Result Visualizations** | — | **NEW: `test_img/` with 7 figures** (see Gallery below) |
+| **CSV Output** | 2 | **5** (+separability / +multimodal validity / +reliability) |
+| **Code Structure** | 7 modules | **Consolidated to 5**: `models.py` / `trainer.py` / `domain.py` / `losses.py` / `main.py` |
+
+---
+
+## ① Functional Branch Upgrade: TemporalEncoder → GAT Two-Stage Encoding
+
+v0.2 fed ROI time series through a linear projection before GAT; v0.3 adds a **TemporalEncoder** (shared-weight 1D CNN) before GAT, modeling in two stages:
+
+```
+ROI BN (B, 246, 150)
+   │
+   ▼ Stage 1: Temporal dynamics ("what each ROI's own signal looks like")
+TemporalEncoder — 1D Conv (kernel=7) → ReLU → 1D Conv (kernel=5) → AdaptiveAvgPool1d → (B, 246, 64)
+   │   all 246 ROIs share the same conv weights
+   ▼ Stage 2: Inter-ROI interaction ("how ROIs relate to each other")
+GATEncoder — 2-layer GAT + residual + LayerNorm → global average pooling → z_functional (B, 64)
+```
+
+Rationale: decouple "per-ROI temporal patterns" from "inter-ROI graph structure" so each stage learns one thing.
+
+## ② Uniform Time Interpolation (`--t_target 150`)
+
+v0.2 zero-padded variable-length ROI series to the global max T; v0.3 instead:
+
+1. Per-ROI **z-score at original length** in `collate_fn`;
+2. **Linear interpolation** to a fixed length `T = 150`.
+
+Benefits: removes length variability while preserving signal shape, and enables batched CNN processing.
+
+## ③ Prediction Reliability Assessment (NEW)
+
+Beyond accuracy, v0.3 quantifies "how confident the model is, and whether that confidence is justified":
+
+| Metric | Meaning |
+|--------|---------|
+| **ECE** (Expected Calibration Error) | 10-bin calibration error, ↓ better |
+| mean_confidence | Average max-softmax confidence |
+| correct / wrong confidence | Avg confidence on correct vs wrong predictions |
+| confidence_gap | correct_conf − wrong_conf, ↑ better |
+
+## ④ Multimodal Validity Probe (NEW)
+
+To prove fusion actually helps (rather than adding a modality for nothing), v0.3 runs **LogisticRegression + StratifiedKFold(3)** probes on three latent spaces:
+
+```
+smri_acc    ← probe on z_structure only
+fc_acc      ← probe on z_functional only
+fusion_acc  ← probe on z_disease (fused)
+fusion_gain = fusion_acc − max(smri_acc, fc_acc)   ← real gain from fusion
+```
+
+`fusion_gain > 0` is direct evidence of multimodal fusion effectiveness.
+
+## ⑤ Latent Separability Metrics (NEW)
+
+All in a unified **cosine-distance** convention, logged every epoch:
+
+- `latent_silhouette` (cosine metric, ↑ better)
+- `latent_inter_distance` (1−cos between class centers, ↑ better)
+- `latent_intra_distance` (1−cos sample-to-center within class, ↓ better)
+- `latent_separation_ratio` = inter / intra (↑ better)
+
+---
+
+## Results Gallery (`test_img/`)
+
+### Training Overview
+
+![Overview of Model Training](test_img/Overview%20of%20Model%20Training.png)
+
+Loss / accuracy curves across training — visualizes convergence and early-stopping timing.
+
+### Best Round Score
+
+![Best round score](test_img/Best%20round%20score.png)
+
+Overall score of the best validation round.
+
+### Per-class Metrics
+
+![Classification performance](test_img/Classification%20performance.png)
+
+Per-class **Precision / Recall / F1** bar chart. Note the imbalance: ADHD Recall near 1.0 (almost all detected), SZ Recall notably low (~0.33) — SZ is the hardest class.
+
+### Confusion Matrix
+
+![Confusion Matrix](test_img/Confusion%20Matrix.png)
+
+Three-class confusion pattern — check which class SZ is most often confused with.
+
+### ROC Curves
+
+![ROC](test_img/ROC.png)
+
+Per-class ROC: **AUC = HC 0.778 / SZ 0.908 / ADHD 0.955**. ADHD is most separable; HC is hardest.
+
+### t-SNE Latent Space
+
+![t-SNE](test_img/t-SNE.png)
+
+t-SNE projection of z_disease — visual clustering and separation of the three classes.
+
+### Early vs Late Fusion
+
+![Early vs Late](test_img/Early%20vs%20Late.png)
+
+Performance comparison of structural/functional fusion at **different fusion timings** (early vs late).
+
+---
+
+## New Hyperparameter
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--t_target` | 150 | **v0.3 only**: ROI time series interpolation target length |
+
+All other hyperparameters are identical to v0.2 (see v0.2 README).
+
+## New Output Files
+
+Training adds 3 CSVs under `OUTPUT/<timestamp>/` (v0.2 already had 分类性能 + 泛化能力):
+
+| File | Content |
+|------|---------|
+| `潜在空间可分性.csv` | silhouette / inter distance / intra distance / separation ratio |
+| `多模态有效性.csv` | smri_acc / fc_acc / fusion_acc / fusion_gain |
+| `预测可依赖性.csv` | ECE / confidence / confidence gap |
+
+---
+
+## Quick Start
+
+```bash
+python -m 2026.8.7_MODEL_ver0.3.main \
+    --t_target 150 \
+    --combat_morph --combat_fc \
+    --lambda_contrast 0.1 \
+    --lambda_ortho 0.05 \
+    --lambda_proto 0.5 \
+    --lambda_hc_domain 0.1 \
+    --seed 42
+```
+
+(Full argument reference in v0.2 README; `--t_target` is the only new argument.)
+
+---
+
+---
+
+# 2026.8.7_MODEL_ver0.3
+
+**多模态脑疾病分类模型 v0.3** — 基于 sMRI + fMRI 多模态融合，区分 **正常对照 (HC)** / **精神分裂症** / **ADHD**。
 
 > 本 README 只介绍 **v0.2 → v0.3 的新内容**；与 v0.2 相同的架构、模块、数据集与基础用法见 [../2026.7.31_MODEL_ver0.2/README.md](../2026.7.31_MODEL_ver0.2/README.md)。
 
 ---
 
-## What's New in v0.3（本次更新的核心）
+## 本次更新的核心（What's New in v0.3）
 
 | 类别 | v0.2 | v0.3 |
 |------|------|------|
